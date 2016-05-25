@@ -1,0 +1,23 @@
+<tool id="pinger" name="Ping Tool" version="1.0.0">
+	<description>A simple example</description>
+	<requirements>
+		<container type="docker">ubuntu</container>
+	</requirements>
+	<command>
+ping -c ${count} ${address}> ${output}
+	</command>
+
+	<inputs>
+		<param name="count" type="integer" label="Ping Count" help="" value="10"/>
+		<param name="address" type="text" label="Address" help="" value="8.8.8.8"/>
+	</inputs>
+
+	<outputs>
+		<data format="txt" name="output" label="Output File"/>
+	</outputs>
+
+	<help>
+You should totally explain how to use your tool here
+	</help>
+
+</tool>

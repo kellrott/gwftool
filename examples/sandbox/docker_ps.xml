@@ -1,0 +1,18 @@
+<tool id="docker_ps" name="Docker PS" version="1.0.0">
+	<description>A simple example</description>
+	<command>
+docker ps > ${output}
+	</command>
+
+	<inputs>
+	</inputs>
+
+	<outputs>
+		<data format="txt" name="output" label="Output File"/>
+	</outputs>
+
+	<help>
+You should totally explain how to use your tool here
+	</help>
+
+</tool>

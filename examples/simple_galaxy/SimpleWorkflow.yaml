@@ -1,0 +1,20 @@
+-
+    type: input
+    label: input_file_1
+-
+    type: input
+    label: input_file_2
+-
+    tool_id: Show beginning1
+    state:
+        input:
+            $link: input_file_1
+        lineNum: 1
+-
+    tool_id: Show tail1
+    annotation: tail_select
+    runtime_values:
+        - lineNum
+    state:
+        input:
+            $link: input_file_2

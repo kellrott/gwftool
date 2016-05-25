@@ -1,0 +1,6 @@
+{
+  "INPUT" : {
+    "class" : "File",
+    "path" : "../simple_data/P04637.fasta"
+  }  
+}

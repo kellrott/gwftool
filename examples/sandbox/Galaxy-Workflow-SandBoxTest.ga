@@ -1,0 +1,75 @@
+{
+    "a_galaxy_workflow": "true", 
+    "annotation": "", 
+    "format-version": "0.1", 
+    "name": "SandBoxTest", 
+    "steps": {
+        "0": {
+            "annotation": "", 
+            "content_id": "pinger", 
+            "id": 0, 
+            "input_connections": {}, 
+            "inputs": [], 
+            "label": null, 
+            "name": "Ping Tool", 
+            "outputs": [
+                {
+                    "name": "output", 
+                    "type": "txt"
+                }
+            ], 
+            "position": {
+                "left": 294.5, 
+                "top": 226.5
+            }, 
+            "post_job_actions": {}, 
+            "tool_errors": null, 
+            "tool_id": "pinger", 
+            "tool_state": "{\"count\": \"\\\"10\\\"\", \"__page__\": 0, \"__rerun_remap_job_id__\": null, \"address\": \"\\\"8.8.8.8\\\"\"}", 
+            "tool_version": "1.0.0", 
+            "type": "tool", 
+            "uuid": "381cf010-61de-4fdf-9b3a-561b9fccd0fb", 
+            "workflow_outputs": [
+                {
+                    "label": null, 
+                    "output_name": "output", 
+                    "uuid": "7d004bae-97da-4867-b947-4440aef32691"
+                }
+            ]
+        }, 
+        "1": {
+            "annotation": "", 
+            "content_id": "docker_ps", 
+            "id": 1, 
+            "input_connections": {}, 
+            "inputs": [], 
+            "label": null, 
+            "name": "Docker PS", 
+            "outputs": [
+                {
+                    "name": "output", 
+                    "type": "txt"
+                }
+            ], 
+            "position": {
+                "left": 282.5, 
+                "top": 351.5
+            }, 
+            "post_job_actions": {}, 
+            "tool_errors": null, 
+            "tool_id": "docker_ps", 
+            "tool_state": "{\"__page__\": 0, \"__rerun_remap_job_id__\": null}", 
+            "tool_version": "1.0.0", 
+            "type": "tool", 
+            "uuid": "b4a02099-a6ff-4b39-b0dd-9b60e88c371a", 
+            "workflow_outputs": [
+                {
+                    "label": null, 
+                    "output_name": "output", 
+                    "uuid": "48e11d49-7e76-4a9a-8432-b8d83b45da01"
+                }
+            ]
+        }
+    }, 
+    "uuid": "306d5bf9-f147-439b-9a16-b0705ce9b7b0"
+}
