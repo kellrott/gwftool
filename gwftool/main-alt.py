@@ -3,10 +3,13 @@ import os
 import sys
 import json
 import yaml
+import time
+import shutil
 import logging
 import argparse
 import tempfile
 import threading
+import subprocess
 import gwftool.warpdrive
 import gwftool.tasks
 import gwftool.runner
@@ -23,6 +26,11 @@ def which(program):
 
 
 def expand_galaxy_input_dict(val):
+    """
+    takes a galaxy input dict, which has '|' delimited
+    fields (param1|data1|file) to be a fully fleshed out 
+    galaxy json record
+    """
     out = {}
     for k, v in val.items():
         out[k] = v
@@ -49,6 +57,8 @@ class WorkflowState:
         self.basedir = basedir
         self.job_num = 0
         
+        self.running = {}
+        
         for step in workflow.steps():
             if step.type == 'data_input':
                 i = inputs[step.label]
@@ -73,13 +83,19 @@ class WorkflowState:
             if str(conn['id']) not in self.results:
                 ready = False
         return ready
-        
+    
+    def step_running(self, step):
+        return str(step.step_id) in self.running
+    
     def step_done(self, step):
         return str(step.step_id) in self.results
     
     def generate_outputs(self, step_id, tool):
         outputs = tool.get_outputs()
         out = {}
+        outdir = os.path.join(self.workdir, str(step_id))
+        if not os.path.exists(outdir):
+            os.mkdir(outdir)
         for name, data in tool.get_outputs().items():
             path = os.path.join("./", str(step_id), name)
             out[name] = { "class" : "File", "path" : os.path.abspath(os.path.join(self.workdir, path)) }
@@ -107,40 +123,77 @@ class WorkflowState:
     
     def create_jobdir(self, step_id):
         self.job_num += 1
-        return os.path.abspath(os.path.join(self.workdir, "jobs", str(self.job_num)))
+        j = os.path.abspath(os.path.join(self.workdir, "jobs", str(self.job_num)))
+        os.mkdir(j)
+        return j
     
     def run_job(self, step, tool):
         sinputs = self.step_inputs(step.step_id)
         outputs = self.generate_outputs(step.step_id, tool)
         job_dir = self.create_jobdir(step.step_id)
-        shell, cmd = tool.render_cmdline(sinputs, outputs)
-        print "cmd (in %s): %s" % (job_dir, cmd)
-        
-        r = Runner(job_dir, shell, cmd,
-            lambda x: self.add_outputs(step.step_id, outputs)
-        )
+        script = tool.render_cmdline(sinputs, outputs)
+        print "script (in %s): %s" % (job_dir, script)
+        #print "step_inputs", sinputs
+        r = Runner(tool, job_dir, script, sinputs, outputs)
         r.start()
-        #print "outputs", outputs
+        self.running[str(step.step_id)] = r
         
-        t_outputs = tool.get_outputs()
-        for o, d in t_outputs.items():
-            if d.from_work_dir is not None:
-                print "mv %s %s" % (os.path.abspath(os.path.join(job_dir, d.from_work_dir)), outputs[o]['path'] )
     
     def has_running(self):
-        return False
+        running = len(self.running) > 0
+        #print "Running", len(self.running)
+        cleanup = []
+        for k, v in self.running.items():
+            if not v.isAlive():
+                cleanup.append(k)
+                t_outputs = v.tool.get_outputs()
+                for o, d in t_outputs.items():
+                    if d.from_work_dir is not None:
+                        src = os.path.abspath(os.path.join(v.jobdir, d.from_work_dir))
+                        dst = v.outputs[o]['path'] 
+                        print "mv %s %s" % (src, dst)
+                        shutil.move(src, dst)
+                self.add_outputs(k, v.outputs)
+        for i in cleanup:
+            del self.running[i]
+        return running
 
 class Runner(threading.Thread):
-    def __init__(self, jobdir, shell, script, callback):
+    def __init__(self, tool, jobdir, script, inputs, outputs):
         threading.Thread.__init__(self)
+        self.tool = tool
         self.jobdir = jobdir
-        self.shell = shell
         self.script = script
-        self.callback = callback
+        self.inputs = inputs
+        self.outputs = outputs
     
     def run(self):
-        print self.shell, self.script
-        self.callback(0)
+        docker_image = self.tool.get_docker_image()
+        mounts = []
+        print self.inputs
+        for k, v in self.inputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                mounts.append("%s:%s:ro" % (v['path'], v['path']))
+        for k, v in self.outputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                open(v['path'], "w").close()
+                mounts.append("%s:%s" % (v['path'], v['path']))
+                
+        script_path = os.path.join(self.jobdir, "script")
+        with open(script_path, "w") as handle:
+            handle.write(self.script)
+        mounts.append("%s:%s" % (self.jobdir, self.jobdir))
+        mounts.append("%s:%s:ro" % (self.tool.tool_dir(), self.tool.tool_dir()))
+        cmd = [which("docker"), "run", "--rm"]
+        for i in mounts:
+            cmd.extend(["-v", i])
+        cmd.extend(["-w", self.jobdir])
+        cmd.append(docker_image)
+        cmd.append("bash")
+        cmd.append(script_path)
+        print "running", " ".join(cmd)
+        proc = subprocess.Popen(cmd)
+        proc.communicate()
 
 def main(args):
     parser = argparse.ArgumentParser()
@@ -154,8 +207,8 @@ def main(args):
     with open(args.inputs) as handle:
         inputs = yaml.load(handle.read())
     
-    #workdir = os.path.abspath(tempfile.mkdtemp(dir=args.workdir, prefix="gwftool_"))
-    #os.chmod(workdir, 0o777)
+    workdir = os.path.abspath(tempfile.mkdtemp(dir=args.workdir, prefix="gwftool_"))
+    os.chmod(workdir, 0o777)
     
     toolbox = ToolBox()
     for d in args.tooldir:
@@ -166,8 +219,8 @@ def main(args):
     workflow = GalaxyWorkflow(ga_file=args.workflow)
     
     print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
-    
-    state = WorkflowState(args.workdir, os.path.dirname(args.workflow), inputs, workflow)
+    os.mkdir(os.path.join(workdir, "jobs"))
+    state = WorkflowState(workdir, os.path.dirname(args.inputs), inputs, workflow)
     
     for step in workflow.tool_steps():
         i = state.missing_inputs(step) 
@@ -177,14 +230,13 @@ def main(args):
     while True:
         ready_found = False
         for step in workflow.tool_steps():
-            if state.step_ready(step) and not state.step_done(step):
+            if state.step_ready(step) and not state.step_running(step) and not state.step_done(step):
                 print "step", step.step_id, step.inputs, step.input_connections
                 if step.tool_id not in toolbox:
                     raise Exception("Tool %s not found" % (step.tool_id))
                 
                 tool = toolbox[step.tool_id]
                 state.run_job(step, tool)
-                
                 ready_found = True
         if not ready_found:
             if state.has_running():

@@ -1,4 +1,5 @@
 
+import re
 import os
 from glob import glob
 from xml.dom.minidom import parse as parseXML
@@ -119,6 +120,8 @@ class GalaxyTool(object):
             for name, data in self._data_parse(elem):
                 self.outputs[name] = data
 
+    def tool_dir(self):
+        return os.path.abspath(os.path.dirname(self.config_file))
 
     def _param_parse(self, param_elem, prefix=None):
         if 'type' in param_elem.attributes.keys() and 'name' in param_elem.attributes.keys():
@@ -158,17 +161,35 @@ class GalaxyTool(object):
     def get_outputs(self):
         return self.outputs
     
+    def get_docker_image(self):
+        dom = parseXML(self.config_file)
+        docker_tag = None
+        scan = dom_scan(dom.childNodes[0], "tool/requirements/container")
+        if scan is not None:
+            for node, prefix, attrs, text in scan:
+                if 'type' in attrs and attrs['type'] == 'docker':
+                    docker_tag = text
+        return docker_tag
+
+    
     def render_cmdline(self, inputs, outputs):
         t = None
         dom = parseXML(self.config_file)
         s = dom_scan(dom.childNodes[0], "tool/command")
         
-        shell = "bash"        
+        inter = None        
         for elem, stack, attrs, text in s:
             if elem.attributes.has_key("interpreter"):
-                shell = elem.attributes['interpreter'].value
+                inter = elem.attributes['interpreter'].value
             t = text
         temp = Template(t, searchList=[inputs, outputs], filter=CMDFilter)
         out = str(temp)
         out = out.replace("\n", " ").strip()
-        return shell, out
+        if inter is not None:
+            res = re.search(r'^([^\s]+)(\s.*)$', out)
+            print out
+            spath = os.path.join(self.tool_dir(), res.group(1))
+            if os.path.exists( spath ):
+                out = spath + res.group(2)
+            out = inter + " " + out
+        return out
