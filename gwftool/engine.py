@@ -1,21 +1,9 @@
 
 import os
-import sys
-import json
-import yaml
 import time
 import shutil
-import logging
-import argparse
-import tempfile
 import threading
 import subprocess
-import gwftool.warpdrive
-import gwftool.tasks
-import gwftool.runner
-
-from gwftool.workflow_io import GalaxyWorkflow
-from gwftool.tool_io import GalaxyTool, ToolBox
 
 
 def which(program):
@@ -47,14 +35,13 @@ def expand_galaxy_input_dict(val):
 
 class WorkflowState:
     
-    def __init__(self, workdir, basedir, inputs, workflow):
+    def __init__(self, workdir, inputs, workflow):
         self.inputs = inputs
         self.workflow = workflow
         self.results = {}
         self.states = {}
         
         self.workdir = workdir
-        self.basedir = basedir
         self.job_num = 0
         
         self.running = {}
@@ -62,7 +49,6 @@ class WorkflowState:
         for step in workflow.steps():
             if step.type == 'data_input':
                 i = inputs[step.label]
-                i['path'] = os.path.abspath(os.path.join(self.basedir, i['path']))
                 self.results[ str(step.step_id) ] = { "output" : i }
             else:
                 self.states[ str(step.step_id) ] = step.tool_state
@@ -195,62 +181,45 @@ class Runner(threading.Thread):
         proc = subprocess.Popen(cmd)
         proc.communicate()
 
-def main(args):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-t", "--tooldir", action="append", default=[])
-    parser.add_argument("-w", "--workdir", default="./")
-    parser.add_argument("workflow")
-    parser.add_argument("inputs")
-    
-    args = parser.parse_args(args)
-    
-    with open(args.inputs) as handle:
-        inputs = yaml.load(handle.read())
-    
-    workdir = os.path.abspath(tempfile.mkdtemp(dir=args.workdir, prefix="gwftool_"))
-    os.chmod(workdir, 0o777)
-    
-    toolbox = ToolBox()
-    for d in args.tooldir:
-        toolbox.scan_dir(d)
-        
-    print toolbox.keys()
-    
-    workflow = GalaxyWorkflow(ga_file=args.workflow)
-    
-    print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
-    os.mkdir(os.path.join(workdir, "jobs"))
-    state = WorkflowState(workdir, os.path.dirname(args.inputs), inputs, workflow)
-    
-    for step in workflow.tool_steps():
-        i = state.missing_inputs(step) 
-        if len(i) > 0:
-            raise Exception("Missing inputs: %s" % (",".join(i)))
-    
-    while True:
-        ready_found = False
-        for step in workflow.tool_steps():
-            if state.step_ready(step) and not state.step_running(step) and not state.step_done(step):
-                print "step", step.step_id, step.inputs, step.input_connections
-                if step.tool_id not in toolbox:
-                    raise Exception("Tool %s not found" % (step.tool_id))
-                
-                tool = toolbox[step.tool_id]
-                state.run_job(step, tool)
-                ready_found = True
-        if not ready_found:
-            if state.has_running():
-                time.sleep(1)
-            else:
-                break
-    
-    for step in workflow.tool_steps():
-        if not state.step_done(step):
-            print "Not done", step, state.missing_inputs(step)
-            #print state.results
-            for name, conn in step.input_connections.items():
-                if str(conn['id']) not in state.results:
-                    print "not ready", conn
 
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+
+class Engine:
+    def __init__(self, workdir, toolbox):
+        self.workdir = workdir
+        self.toolbox = toolbox
+    
+    def run_job(self, workflow, inputs):
+        print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
+        os.mkdir(os.path.join(self.workdir, "jobs"))
+        state = WorkflowState(self.workdir, inputs, workflow)
+        
+        for step in workflow.tool_steps():
+            i = state.missing_inputs(step) 
+            if len(i) > 0:
+                raise Exception("Missing inputs: %s" % (",".join(i)))
+        
+        while True:
+            ready_found = False
+            for step in workflow.tool_steps():
+                if state.step_ready(step) and not state.step_running(step) and not state.step_done(step):
+                    print "step", step.step_id, step.inputs, step.input_connections
+                    if step.tool_id not in self.toolbox:
+                        raise Exception("Tool %s not found" % (step.tool_id))
+                    
+                    tool = self.toolbox[step.tool_id]
+                    state.run_job(step, tool)
+                    ready_found = True
+            if not ready_found:
+                if state.has_running():
+                    time.sleep(1)
+                else:
+                    break
+        
+        for step in workflow.tool_steps():
+            if not state.step_done(step):
+                print "Not done", step, state.missing_inputs(step)
+                #print state.results
+                for name, conn in step.input_connections.items():
+                    if str(conn['id']) not in state.results:
+                        print "not ready", conn
+
