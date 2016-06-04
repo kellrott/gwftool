@@ -1,6 +1,7 @@
 
 import os
 import time
+import json
 import shutil
 import threading
 import subprocess
@@ -33,14 +34,57 @@ def expand_galaxy_input_dict(val):
             o[kl[-1]] = v
     return out
 
+class Runner(threading.Thread):
+    def __init__(self, tool, jobid, jobdir, script, inputs, outputs):
+        threading.Thread.__init__(self)
+        self.tool = tool
+        self.jobid = jobid
+        self.jobdir = jobdir
+        self.script = script
+        self.inputs = inputs
+        self.outputs = outputs
+        self.stdout = None
+        self.stderr = None
+    
+    def run(self):
+        docker_image = self.tool.get_docker_image()
+        mounts = []
+        print self.inputs
+        for k, v in self.inputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                mounts.append("%s:%s:ro" % (v['path'], v['path']))
+        for k, v in self.outputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                open(v['path'], "w").close()
+                mounts.append("%s:%s" % (v['path'], v['path']))
+                
+        script_path = os.path.join(self.jobdir, "script")
+        with open(script_path, "w") as handle:
+            handle.write(self.script)
+        mounts.append("%s:%s" % (self.jobdir, self.jobdir))
+        mounts.append("%s:%s:ro" % (self.tool.tool_dir(), self.tool.tool_dir()))
+        cmd = [which("docker"), "run", "--rm"]
+        for i in mounts:
+            cmd.extend(["-v", i])
+        cmd.extend(["-w", self.jobdir])
+        cmd.append(docker_image)
+        cmd.append("bash")
+        cmd.append(script_path)
+        print "running", " ".join(cmd)
+        proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        stdout, stderr = proc.communicate()
+        self.stdout = stdout
+        self.stderr = stderr
+
 class WorkflowState:
     
-    def __init__(self, workdir, inputs, workflow):
+    def __init__(self, outdir, workdir, inputs, workflow):
         self.inputs = inputs
         self.workflow = workflow
         self.results = {}
         self.states = {}
         
+        self.outdir = outdir
         self.workdir = workdir
         self.job_num = 0
         
@@ -79,12 +123,12 @@ class WorkflowState:
     def generate_outputs(self, step_id, tool):
         outputs = tool.get_outputs()
         out = {}
-        outdir = os.path.join(self.workdir, str(step_id))
+        outdir = os.path.join(self.outdir, str(step_id))
         if not os.path.exists(outdir):
             os.mkdir(outdir)
         for name, data in tool.get_outputs().items():
             path = os.path.join("./", str(step_id), name)
-            out[name] = { "class" : "File", "path" : os.path.abspath(os.path.join(self.workdir, path)) }
+            out[name] = { "class" : "File", "path" : os.path.abspath(os.path.join(self.outdir, path)) }
         return out
     
     def step_inputs(self, step_id):
@@ -113,16 +157,27 @@ class WorkflowState:
         os.mkdir(j)
         return j
     
-    def run_job(self, step, tool):
+    def run_job(self, step, tool, runner=Runner):
         sinputs = self.step_inputs(step.step_id)
         outputs = self.generate_outputs(step.step_id, tool)
         job_dir = self.create_jobdir(step.step_id)
         script = tool.render_cmdline(sinputs, outputs)
         print "script (in %s): %s" % (job_dir, script)
         #print "step_inputs", sinputs
-        r = Runner(tool, job_dir, script, sinputs, outputs)
-        r.start()
-        self.running[str(step.step_id)] = r
+        if runner is not None:
+            r = runner(tool=tool, jobid=step.step_id, jobdir=job_dir, script=script, inputs=sinputs, outputs=outputs)
+            r.start()
+            self.running[str(step.step_id)] = r
+    
+    def add_jobreport(self, job):
+        meta_path = os.path.join(self.outdir, str(job.jobid) + ".json")
+        with open(meta_path, "w") as handle:
+            meta = {
+                "stderr" : job.stderr,
+                "stdout" : job.stdout,
+                "script" : job.script
+            }
+            handle.write(json.dumps(meta))
         
     
     def has_running(self):
@@ -139,59 +194,28 @@ class WorkflowState:
                         dst = v.outputs[o]['path'] 
                         print "mv %s %s" % (src, dst)
                         shutil.move(src, dst)
+                self.add_jobreport(v)
                 self.add_outputs(k, v.outputs)
         for i in cleanup:
             del self.running[i]
         return running
 
-class Runner(threading.Thread):
-    def __init__(self, tool, jobdir, script, inputs, outputs):
-        threading.Thread.__init__(self)
-        self.tool = tool
-        self.jobdir = jobdir
-        self.script = script
-        self.inputs = inputs
-        self.outputs = outputs
-    
-    def run(self):
-        docker_image = self.tool.get_docker_image()
-        mounts = []
-        print self.inputs
-        for k, v in self.inputs.items():
-            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
-                mounts.append("%s:%s:ro" % (v['path'], v['path']))
-        for k, v in self.outputs.items():
-            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
-                open(v['path'], "w").close()
-                mounts.append("%s:%s" % (v['path'], v['path']))
-                
-        script_path = os.path.join(self.jobdir, "script")
-        with open(script_path, "w") as handle:
-            handle.write(self.script)
-        mounts.append("%s:%s" % (self.jobdir, self.jobdir))
-        mounts.append("%s:%s:ro" % (self.tool.tool_dir(), self.tool.tool_dir()))
-        cmd = [which("docker"), "run", "--rm"]
-        for i in mounts:
-            cmd.extend(["-v", i])
-        cmd.extend(["-w", self.jobdir])
-        cmd.append(docker_image)
-        cmd.append("bash")
-        cmd.append(script_path)
-        print "running", " ".join(cmd)
-        proc = subprocess.Popen(cmd)
-        proc.communicate()
-
 
 
 class Engine:
-    def __init__(self, workdir, toolbox):
-        self.workdir = workdir
+    def __init__(self, outdir, workdir, toolbox):
+        self.workdir = os.path.abspath(workdir)
+        self.outdir = os.path.abspath(outdir)
+        if not os.path.exists(self.workdir):
+            os.mkdir(self.workdir)
+        if not os.path.exists(self.outdir):
+            os.mkdir(self.outdir)
         self.toolbox = toolbox
     
-    def run_job(self, workflow, inputs):
+    def run_job(self, workflow, inputs, dryrun=False):
         print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
         os.mkdir(os.path.join(self.workdir, "jobs"))
-        state = WorkflowState(self.workdir, inputs, workflow)
+        state = WorkflowState(outdir=self.outdir, workdir=self.workdir, inputs=inputs, workflow=workflow)
         
         for step in workflow.tool_steps():
             i = state.missing_inputs(step) 
