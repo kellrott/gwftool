@@ -13,7 +13,9 @@ from gwftool.engine import Engine
 
 
 
-def main(args):
+def main(args=None):
+    if args is None:
+        args = sys.argv[1:]
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--tooldir", action="append", default=[])
     parser.add_argument("-w", "--workdir", default="./")
