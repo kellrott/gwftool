@@ -184,7 +184,9 @@ class WorkflowState:
             meta = {
                 "stderr" : job.stderr,
                 "stdout" : job.stdout,
-                "script" : job.script
+                "script" : job.script,
+                "image"  : job.tool.get_docker_image(),
+                "tool"   : job.tool.tool_id
             }
             handle.write(json.dumps(meta))
         

@@ -101,6 +101,13 @@ class GalaxyTool(object):
 
         self.inputs = {}
         dom = parseXML(self.config_file)
+        s = list(dom_scan(dom.childNodes[0], "tool"))
+        if len(s):
+            if 'id' in s[0][2]:
+                self.tool_id = s[0][2]['id']
+        else:
+            self.tool_id = None
+
         s = dom_scan(dom.childNodes[0], "tool/inputs/param")
         for elem, stack, attrs, text in s:
             for name, param in self._param_parse(elem):
