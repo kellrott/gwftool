@@ -9,7 +9,7 @@ import tempfile
 
 from gwftool.workflow_io import GalaxyWorkflow
 from gwftool.tool_io import GalaxyTool, ToolBox
-from gwftool.engine import Engine
+from gwftool.engine import Engine, LocalManager
 
 
 
@@ -20,6 +20,7 @@ def main(args=None):
     parser.add_argument("-t", "--tooldir", action="append", default=[])
     parser.add_argument("-w", "--workdir", default="./")
     parser.add_argument("-o", "--outdir", default="./")
+    parser.add_argument("--no-net", action="store_true", default=False)
     parser.add_argument("--dryrun", default=False, action="store_true")
     parser.add_argument("workflow")
     parser.add_argument("inputs")
@@ -45,7 +46,8 @@ def main(args=None):
         
     workflow = GalaxyWorkflow(ga_file=args.workflow)
     
-    engine = Engine(workdir=workdir, outdir=args.outdir, toolbox=toolbox)
+    manager = LocalManager(no_net=True)
+    engine = Engine(workdir=workdir, outdir=args.outdir, toolbox=toolbox, manager=manager)
     engine.run_job(workflow, inputs, dryrun=args.dryrun)
 
 if __name__ == "__main__":

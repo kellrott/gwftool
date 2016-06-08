@@ -34,8 +34,15 @@ def expand_galaxy_input_dict(val):
             o[kl[-1]] = v
     return out
 
+class LocalManager:
+    def __init__(self, no_net=False):
+        self.no_net = no_net
+    
+    def new_job(self, tool, jobid, jobdir, script, inputs, outputs):
+        return Runner(tool, jobid, jobdir, script, inputs, outputs, no_net=self.no_net)
+
 class Runner(threading.Thread):
-    def __init__(self, tool, jobid, jobdir, script, inputs, outputs):
+    def __init__(self, tool, jobid, jobdir, script, inputs, outputs, no_net):
         threading.Thread.__init__(self)
         self.tool = tool
         self.jobid = jobid
@@ -43,6 +50,7 @@ class Runner(threading.Thread):
         self.script = script
         self.inputs = inputs
         self.outputs = outputs
+        self.no_net = no_net
         self.stdout = None
         self.stderr = None
     
@@ -64,6 +72,8 @@ class Runner(threading.Thread):
         mounts.append("%s:%s" % (self.jobdir, self.jobdir))
         mounts.append("%s:%s:ro" % (self.tool.tool_dir(), self.tool.tool_dir()))
         cmd = [which("docker"), "run", "--rm"]
+        if self.no_net:
+            cmd.append("--net=none")
         for i in mounts:
             cmd.extend(["-v", i])
         cmd.extend(["-w", self.jobdir])
@@ -157,17 +167,16 @@ class WorkflowState:
         os.mkdir(j)
         return j
     
-    def run_job(self, step, tool, runner=Runner):
+    def run_job(self, step, tool, manager):
         sinputs = self.step_inputs(step.step_id)
         outputs = self.generate_outputs(step.step_id, tool)
         job_dir = self.create_jobdir(step.step_id)
         script = tool.render_cmdline(sinputs, outputs)
         print "script (in %s): %s" % (job_dir, script)
         #print "step_inputs", sinputs
-        if runner is not None:
-            r = runner(tool=tool, jobid=step.step_id, jobdir=job_dir, script=script, inputs=sinputs, outputs=outputs)
-            r.start()
-            self.running[str(step.step_id)] = r
+        r = manager.new_job(tool=tool, jobid=step.step_id, jobdir=job_dir, script=script, inputs=sinputs, outputs=outputs)
+        r.start()
+        self.running[str(step.step_id)] = r
     
     def add_jobreport(self, job):
         meta_path = os.path.join(self.outdir, str(job.jobid) + ".json")
@@ -203,7 +212,11 @@ class WorkflowState:
 
 
 class Engine:
-    def __init__(self, outdir, workdir, toolbox):
+    def __init__(self, outdir, workdir, toolbox, manager=None):
+        if manager is None:
+            self.manager = LocalManager()
+        else:
+            self.manager = manager
         self.workdir = os.path.abspath(workdir)
         self.outdir = os.path.abspath(outdir)
         if not os.path.exists(self.workdir):
@@ -231,7 +244,7 @@ class Engine:
                         raise Exception("Tool %s not found" % (step.tool_id))
                     
                     tool = self.toolbox[step.tool_id]
-                    state.run_job(step, tool)
+                    state.run_job(step, tool, self.manager)
                     ready_found = True
             if not ready_found:
                 if state.has_running():
