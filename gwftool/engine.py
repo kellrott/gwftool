@@ -76,6 +76,7 @@ class Runner(threading.Thread):
             cmd.append("--net=none")
         for i in mounts:
             cmd.extend(["-v", i])
+        cmd.extend(["-u", str(os.getuid())])
         cmd.extend(["-w", self.jobdir])
         cmd.append(docker_image)
         cmd.append("bash")
