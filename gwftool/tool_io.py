@@ -175,7 +175,7 @@ class GalaxyTool(object):
     def get_docker_image(self):
         dom = parseXML(self.config_file)
         docker_tag = None
-        scan = dom_scan(dom.childNodes[0], "tool/requirements/container")
+        scan = dom_scan(dom, "tool/requirements/container")
         if scan is not None:
             for node, prefix, attrs, text in scan:
                 if 'type' in attrs and attrs['type'] == 'docker':
@@ -186,7 +186,7 @@ class GalaxyTool(object):
     def render_cmdline(self, inputs, outputs):
         t = None
         dom = parseXML(self.config_file)
-        s = dom_scan(dom.childNodes[0], "tool/command")
+        s = dom_scan(dom, "tool/command")
         
         inter = None        
         for elem, stack, attrs, text in s:
