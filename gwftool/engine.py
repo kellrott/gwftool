@@ -84,6 +84,7 @@ class Runner(threading.Thread):
         print "running", " ".join(cmd)
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         stdout, stderr = proc.communicate()
+        self.return_code = proc.returncode
         self.stdout = stdout
         self.stderr = stderr
 
@@ -187,7 +188,8 @@ class WorkflowState:
                 "stdout" : job.stdout,
                 "script" : job.script,
                 "image"  : job.tool.get_docker_image(),
-                "tool"   : job.tool.tool_id
+                "tool"   : job.tool.tool_id,
+                "exitcode" : job.return_code
             }
             handle.write(json.dumps(meta))
         
@@ -205,7 +207,10 @@ class WorkflowState:
                         src = os.path.abspath(os.path.join(v.jobdir, d.from_work_dir))
                         dst = v.outputs[o]['path'] 
                         print "mv %s %s" % (src, dst)
-                        shutil.move(src, dst)
+                        if os.path.exists(src):
+                            shutil.move(src, dst)
+                        else:
+                            print "Error: Missing output %s %s" % (k, src)
                 self.add_jobreport(v)
                 self.add_outputs(k, v.outputs)
         for i in cleanup:
