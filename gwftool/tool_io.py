@@ -24,6 +24,10 @@ def getText(nodelist):
 
 def dom_scan(node, query):
     stack = query.split("/")
+    if node.localName is None and len(node.childNodes):
+        for i in node.childNodes:
+            if i.localName == stack[0]:
+                return dom_scan_iter(i, stack[1:], [stack[0]])
     if node.localName == stack[0]:
         return dom_scan_iter(node, stack[1:], [stack[0]])
 
@@ -54,7 +58,7 @@ class ToolBox(object):
         #attempting to load them
         for tool_conf in glob(os.path.join(os.path.abspath(tool_dir), "*.xml")) + glob(os.path.join(os.path.abspath(tool_dir), "*", "*.xml")):
             dom = parseXML(tool_conf)
-            s = list(dom_scan(dom.childNodes[0], "tool"))
+            s = list(dom_scan(dom, "tool"))
             if len(s):
                 if 'id' in s[0][2]:
                     tool_id = s[0][2]['id']
@@ -101,19 +105,19 @@ class GalaxyTool(object):
 
         self.inputs = {}
         dom = parseXML(self.config_file)
-        s = list(dom_scan(dom.childNodes[0], "tool"))
+        s = list(dom_scan(dom, "tool"))
         if len(s):
             if 'id' in s[0][2]:
                 self.tool_id = s[0][2]['id']
         else:
             self.tool_id = None
 
-        s = dom_scan(dom.childNodes[0], "tool/inputs/param")
+        s = dom_scan(dom, "tool/inputs/param")
         for elem, stack, attrs, text in s:
             for name, param in self._param_parse(elem):
                 self.inputs[name] = param
 
-        s = dom_scan(dom.childNodes[0], "tool/inputs/conditional")
+        s = dom_scan(dom, "tool/inputs/conditional")
         for elem, stack, attrs, text in s:
             c = list(dom_scan(elem, "conditional/param"))
             if 'name' in attrs:
@@ -122,7 +126,7 @@ class GalaxyTool(object):
                         self.inputs[name] = param
 
         self.outputs = {}
-        s = dom_scan(dom.childNodes[0], "tool/outputs/data")
+        s = dom_scan(dom, "tool/outputs/data")
         for elem, stack, attrs, text in s:
             for name, data in self._data_parse(elem):
                 self.outputs[name] = data
