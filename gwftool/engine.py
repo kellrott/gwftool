@@ -5,6 +5,7 @@ import json
 import shutil
 import threading
 import subprocess
+from datetime import datetime
 
 
 def which(program):
@@ -53,6 +54,8 @@ class Runner(threading.Thread):
         self.no_net = no_net
         self.stdout = None
         self.stderr = None
+        self.starttime = None
+        self.endtime = None
     
     def run(self):
         docker_image = self.tool.get_docker_image()
@@ -82,11 +85,13 @@ class Runner(threading.Thread):
         cmd.append("bash")
         cmd.append(script_path)
         print "running", " ".join(cmd)
+        self.starttime=datetime.now()
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         stdout, stderr = proc.communicate()
         self.return_code = proc.returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.endtime=datetime.now()
 
 class WorkflowState:
     
@@ -189,7 +194,8 @@ class WorkflowState:
                 "script" : job.script,
                 "image"  : job.tool.get_docker_image(),
                 "tool"   : job.tool.tool_id,
-                "exitcode" : job.return_code
+                "exitcode" : job.return_code,
+                "wallSeconds" : (job.endtime - job.starttime).total_seconds()
             }
             handle.write(json.dumps(meta))
         
