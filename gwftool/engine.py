@@ -3,9 +3,11 @@ import os
 import time
 import json
 import shutil
+import shlex
 import threading
 import subprocess
 from datetime import datetime
+import gwftool.tes as tes
 
 
 def which(program):
@@ -35,61 +37,149 @@ def expand_galaxy_input_dict(val):
             o[kl[-1]] = v
     return out
 
-
-def NoNetLocalRunner(tool, jobid, jobdir, script, inputs, outputs):
-    return Runner(tool, jobid, jobdir, script, inputs, outputs, no_net=False)
-
-
-class Runner(threading.Thread):
-    def __init__(self, tool, jobid, jobdir, script, inputs, outputs, no_net):
-        threading.Thread.__init__(self)
+class Job:
+    def __init__(self, tool, id_, dir_, script, inputs, outputs):
         self.tool = tool
-        self.jobid = jobid
-        self.jobdir = jobdir
+        self.id = id_
+        self.dir = dir_
         self.script = script
         self.inputs = inputs
         self.outputs = outputs
-        self.no_net = no_net
         self.stdout = None
         self.stderr = None
         self.starttime = None
         self.endtime = None
+        self.return_code = None
+
+class AbstractRunner:
+    def __init__(self, job):
+        self.job = job
+    def start(self):
+        pass
+    def isAlive(self):
+        pass
+        
+
+class TESRunner:
+    def __init__(self, job):
+        self.job = job
+        self.service = tes.TaskService("http://localhost:8000")
+
+    def _get_inputs(self):
+        inputs = []
+        for k, v in self.job.inputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                inputs.append({
+                    "url": v['path'],
+                    "path": v['path'],
+                })
+
+        inputs.append({
+            "path": "/opt/gwftool/script.sh",
+            "contents": self.job.script,
+        })
+
+        inputs.append({
+            "url": self.job.dir,
+            "path": self.job.dir,
+            "type": "DIRECTORY",
+        })
+
+        inputs.append({
+            "url": self.job.tool.tool_dir(),
+            "path": self.job.tool.tool_dir(),
+            "type": "DIRECTORY",
+        })
+        return inputs
+
+    def _get_outputs(self):
+        outputs = []
+        for k, v in self.job.outputs.items():
+            if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
+                outputs.append({
+                    "url": v['path'],
+                    "path": v['path'],
+                })
+        return outputs
+
+    def start(self):
+        self.task_id = self.service.create({
+            "name": "TODO",
+            "executors": [{
+                    "image_name": self.job.tool.get_docker_image(),
+                    "cmd": ["bash", "/opt/gwftool/script.sh"],
+                    "workdir": self.job.dir,
+            }],
+            "inputs": self._get_inputs(),
+            "outputs": self._get_outputs(),
+        })
+
+    def isAlive(self):
+        task = self.service.get(self.task_id)
+        state = task.get("state")
+        print "STATE", state
+        return not tes.done_state(state)
+
+
+def NoNetLocalRunner(job):
+    return LocalRunner(job, no_net=False)
+
+
+class LocalRunner(threading.Thread):
+    def __init__(self, job, no_net):
+        threading.Thread.__init__(self)
+        self.job = job
+        self.no_net = no_net
     
     def run(self):
-        docker_image = self.tool.get_docker_image()
+                
+        # Write the command script to a file
+        script_path = os.path.join(self.job.dir, "script")
+        with open(script_path, "w") as handle:
+            handle.write(self.job.script)
+
+        # Build the docker volume mounts
         mounts = []
-        print self.inputs
-        for k, v in self.inputs.items():
+
+        for k, v in self.job.inputs.items():
             if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
                 mounts.append("%s:%s:ro" % (v['path'], v['path']))
-        for k, v in self.outputs.items():
+
+        for k, v in self.job.outputs.items():
             if isinstance(v, dict) and 'class' in v and v['class'] == 'File':
                 open(v['path'], "w").close()
                 mounts.append("%s:%s" % (v['path'], v['path']))
-                
-        script_path = os.path.join(self.jobdir, "script")
-        with open(script_path, "w") as handle:
-            handle.write(self.script)
-        mounts.append("%s:%s" % (self.jobdir, self.jobdir))
-        mounts.append("%s:%s:ro" % (self.tool.tool_dir(), self.tool.tool_dir()))
+
+        mounts.append("%s:%s" % (self.job.dir, self.job.dir))
+        mounts.append("%s:%s:ro" % (self.job.tool.tool_dir(), self.job.tool.tool_dir()))
+
+        # Build docker run command
         cmd = [which("docker"), "run", "--rm"]
         if self.no_net:
             cmd.append("--net=none")
+
         for i in mounts:
             cmd.extend(["-v", i])
+
         cmd.extend(["-u", str(os.getuid())])
-        cmd.extend(["-w", self.jobdir])
+        cmd.extend(["-w", self.job.dir])
+        docker_image = self.job.tool.get_docker_image()
         cmd.append(docker_image)
         cmd.append("bash")
         cmd.append(script_path)
+
         print "running", " ".join(cmd)
-        self.starttime=datetime.now()
+
+        self.job.starttime = datetime.now()
+
+        # Execute local `docker run` command
         proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         stdout, stderr = proc.communicate()
-        self.return_code = proc.returncode
-        self.stdout = stdout
-        self.stderr = stderr
-        self.endtime=datetime.now()
+
+        self.job.return_code = proc.returncode
+        self.job.stdout = stdout
+        self.job.stderr = stderr
+        self.job.endtime = datetime.now()
 
 
 class WorkflowState:
@@ -142,14 +232,19 @@ class WorkflowState:
     
     def generate_outputs(self, step_id, tool):
         step_id = str(step_id)
-        outputs = tool.get_outputs()
-        out = {}
+
         outdir = os.path.join(self.outdir, step_id)
         if not os.path.exists(outdir):
             os.mkdir(outdir)
-        for name, data in tool.get_outputs().items():
+
+        out = {}
+        for name, _ in tool.get_outputs().items():
             path = os.path.join("./", step_id, name)
-            out[name] = { "class" : "File", "path" : os.path.abspath(os.path.join(self.outdir, path)) }
+            out[name] = {
+                "class": "File",
+                "path": os.path.abspath(os.path.join(self.outdir, path))
+            }
+            print 'OUT', out
         return out
     
     def step_inputs(self, step_id):
@@ -167,18 +262,14 @@ class WorkflowState:
         out = expand_galaxy_input_dict(out)
         return out
     
-    def add_outputs(self, step_id, outputs):
-        step_id = step_id
-        self.results[step_id] = outputs
-    
     def create_jobdir(self, step_id):
         self.job_num += 1
         j = os.path.abspath(os.path.join(self.workdir, "jobs", str(self.job_num)))
         os.mkdir(j)
         return j
     
-    def add_jobreport(self, job):
-        meta_path = os.path.join(self.outdir, str(job.jobid) + ".json")
+    def _add_jobreport(self, job):
+        meta_path = os.path.join(self.outdir, str(job.id), str(job.id) + ".json")
         with open(meta_path, "w") as handle:
             meta = {
                 "stderr" : job.stderr,
@@ -187,36 +278,41 @@ class WorkflowState:
                 "image"  : job.tool.get_docker_image(),
                 "tool"   : job.tool.tool_id,
                 "exitcode" : job.return_code,
-                "wallSeconds" : (job.endtime - job.starttime).total_seconds()
             }
+
+            if job.starttime and job.endtime:
+                meta["wallSeconds"] = (job.endtime - job.starttime).total_seconds()
+
             handle.write(json.dumps(meta))
     
+    def _add_outputs(self, step_id, outputs):
+        step_id = step_id
+        self.results[step_id] = outputs
+    
     def has_running(self):
-        running = len(self.running) > 0
-        #print "Running", len(self.running)
-        cleanup = []
+        running = {}
 
         for k, v in self.running.items():
-            if not v.isAlive():
-                cleanup.append(k)
-
-                for o, d in v.tool.get_outputs().items():
+            if v.isAlive():
+                running[k] = v
+            else:
+                for o, d in v.job.tool.get_outputs().items():
                     if d.from_work_dir is not None:
-                        src = os.path.abspath(os.path.join(v.jobdir, d.from_work_dir))
-                        dst = v.outputs[o]['path'] 
+                        src = os.path.abspath(os.path.join(v.job.dir, d.from_work_dir))
+                        dst = v.job.outputs[o]['path'] 
+
                         print "mv %s %s" % (src, dst)
-                        if os.path.exists(src):
+
+                        if os.path.exists(src) and not os.path.exists(dst):
                             shutil.move(src, dst)
                         else:
                             print "Error: Missing output %s %s" % (k, src)
 
-                self.add_jobreport(v)
-                self.add_outputs(k, v.outputs)
+                self._add_jobreport(v.job)
+                self._add_outputs(k, v.job.outputs)
 
-        for i in cleanup:
-            del self.running[i]
-
-        return running
+        self.running = running
+        return len(running) > 0
 
 
 
@@ -273,10 +369,11 @@ class Engine:
 
                     print "script (in %s): %s" % (job_dir, script)
 
-                    r = self.new_runner(
+                    job = Job(
                         tool, step.step_id, job_dir,
                         script, inputs, outputs
                     )
+                    r = self.new_runner(job)
                     r.start()
                     state.running[step.step_id] = r
 

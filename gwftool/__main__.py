@@ -9,7 +9,7 @@ import tempfile
 
 from gwftool.workflow_io import GalaxyWorkflow
 from gwftool.tool_io import GalaxyTool, ToolBox
-from gwftool.engine import Engine, NoNetLocalRunner
+from gwftool.engine import Engine, NoNetLocalRunner, TESRunner
 
 
 def main(args=None):
@@ -51,7 +51,7 @@ def main(args=None):
     # GalaxyWorkflow represents the workflow definition file
     workflow = GalaxyWorkflow(ga_file=args.workflow)
     
-    engine = Engine(args.outdir, workdir, toolbox, NoNetLocalRunner)
+    engine = Engine(args.outdir, workdir, toolbox, TESRunner)#NoNetLocalRunner)
     engine.run_workflow(workflow, inputs)
 
 
