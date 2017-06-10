@@ -32,6 +32,9 @@ class ToolBox(object):
     def __getitem__(self, key):
         return self.tools[key]
 
+    def get(self, key):
+        return self.tools.get(key)
+
 
 class ToolParam(object):
     def __init__(self, name, type, value=None, optional=False, label=""):
