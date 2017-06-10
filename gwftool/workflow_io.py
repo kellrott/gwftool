@@ -1,8 +1,8 @@
-
-
 import json
 
+
 class WorkflowStep(object):
+
     def __init__(self, workflow, desc):
         self.workflow = workflow
         self.desc = desc

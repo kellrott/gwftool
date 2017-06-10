@@ -35,12 +35,10 @@ def expand_galaxy_input_dict(val):
             o[kl[-1]] = v
     return out
 
-class LocalManager:
-    def __init__(self, no_net=False):
-        self.no_net = no_net
-    
-    def new_job(self, tool, jobid, jobdir, script, inputs, outputs):
-        return Runner(tool, jobid, jobdir, script, inputs, outputs, no_net=self.no_net)
+
+def NoNetLocalRunner(tool, jobid, jobdir, script, inputs, outputs):
+    return Runner(tool, jobid, jobdir, script, inputs, outputs, no_net=False)
+
 
 class Runner(threading.Thread):
     def __init__(self, tool, jobid, jobdir, script, inputs, outputs, no_net):
@@ -93,7 +91,9 @@ class Runner(threading.Thread):
         self.stderr = stderr
         self.endtime=datetime.now()
 
+
 class WorkflowState:
+    '''WorkflowState tracks the state of running jobs'''
     
     def __init__(self, outdir, workdir, inputs, workflow):
         self.inputs = inputs
@@ -107,12 +107,13 @@ class WorkflowState:
         
         self.running = {}
         
+        # Pre-load the workflow inputs into the results dictionary.
         for step in workflow.steps():
             if step.type == 'data_input':
                 i = inputs[step.label]
-                self.results[ str(step.step_id) ] = { "output" : i }
+                self.results[step.step_id] = { "output" : i }
             else:
-                self.states[ str(step.step_id) ] = step.tool_state
+                self.states[step.step_id] = step.tool_state
                 
     def missing_inputs(self, step):
         out = []
@@ -127,36 +128,38 @@ class WorkflowState:
             if i['name'] not in self.inputs:
                 ready = False
         for name, conn in step.input_connections.items():
-            if str(conn['id']) not in self.results:
+            if conn['id'] not in self.results:
                 ready = False
         return ready
     
     def step_running(self, step):
-        return str(step.step_id) in self.running
+        '''step_running returns True if the given step is currently running'''
+        return step.step_id in self.running
     
     def step_done(self, step):
-        return str(step.step_id) in self.results
+        '''step_done returns True if the given step is done'''
+        return step.step_id in self.results
     
     def generate_outputs(self, step_id, tool):
+        step_id = str(step_id)
         outputs = tool.get_outputs()
         out = {}
-        outdir = os.path.join(self.outdir, str(step_id))
+        outdir = os.path.join(self.outdir, step_id)
         if not os.path.exists(outdir):
             os.mkdir(outdir)
         for name, data in tool.get_outputs().items():
-            path = os.path.join("./", str(step_id), name)
+            path = os.path.join("./", step_id, name)
             out[name] = { "class" : "File", "path" : os.path.abspath(os.path.join(self.outdir, path)) }
         return out
     
     def step_inputs(self, step_id):
-        step_id = str(step_id)
+        step_id = step_id
         out = {}
         for k,v in self.states[step_id].items():
             if v is not None:
                 out[k] = v
         for name, conn in self.workflow.get_step(step_id).input_connections.items():
-            #print self.results[str(conn['id'])]
-            conn_id = str(conn['id'])
+            conn_id = conn['id']
             if self.workflow.get_step(conn_id).type == 'data_input':
                 out[name] = self.results[conn_id]['output']
             else:
@@ -165,7 +168,7 @@ class WorkflowState:
         return out
     
     def add_outputs(self, step_id, outputs):
-        step_id = str(step_id)
+        step_id = step_id
         self.results[step_id] = outputs
     
     def create_jobdir(self, step_id):
@@ -173,17 +176,6 @@ class WorkflowState:
         j = os.path.abspath(os.path.join(self.workdir, "jobs", str(self.job_num)))
         os.mkdir(j)
         return j
-    
-    def run_job(self, step, tool, manager):
-        sinputs = self.step_inputs(step.step_id)
-        outputs = self.generate_outputs(step.step_id, tool)
-        job_dir = self.create_jobdir(step.step_id)
-        script = tool.render_cmdline(sinputs, outputs)
-        print "script (in %s): %s" % (job_dir, script)
-        #print "step_inputs", sinputs
-        r = manager.new_job(tool=tool, jobid=step.step_id, jobdir=job_dir, script=script, inputs=sinputs, outputs=outputs)
-        r.start()
-        self.running[str(step.step_id)] = r
     
     def add_jobreport(self, job):
         meta_path = os.path.join(self.outdir, str(job.jobid) + ".json")
@@ -198,17 +190,17 @@ class WorkflowState:
                 "wallSeconds" : (job.endtime - job.starttime).total_seconds()
             }
             handle.write(json.dumps(meta))
-        
     
     def has_running(self):
         running = len(self.running) > 0
         #print "Running", len(self.running)
         cleanup = []
+
         for k, v in self.running.items():
             if not v.isAlive():
                 cleanup.append(k)
-                t_outputs = v.tool.get_outputs()
-                for o, d in t_outputs.items():
+
+                for o, d in v.tool.get_outputs().items():
                     if d.from_work_dir is not None:
                         src = os.path.abspath(os.path.join(v.jobdir, d.from_work_dir))
                         dst = v.outputs[o]['path'] 
@@ -217,60 +209,90 @@ class WorkflowState:
                             shutil.move(src, dst)
                         else:
                             print "Error: Missing output %s %s" % (k, src)
+
                 self.add_jobreport(v)
                 self.add_outputs(k, v.outputs)
+
         for i in cleanup:
             del self.running[i]
+
         return running
 
 
 
 class Engine:
-    def __init__(self, outdir, workdir, toolbox, manager=None):
-        if manager is None:
-            self.manager = LocalManager()
-        else:
-            self.manager = manager
+
+    def __init__(self, outdir, workdir, toolbox, runner_factory):
         self.workdir = os.path.abspath(workdir)
         self.outdir = os.path.abspath(outdir)
+        self.toolbox = toolbox
+        self.new_runner = runner_factory
+    
+    def run_workflow(self, workflow, inputs):
+        print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
+
+        # initialize some working directories
         if not os.path.exists(self.workdir):
             os.mkdir(self.workdir)
+
         if not os.path.exists(self.outdir):
             os.mkdir(self.outdir)
-        self.toolbox = toolbox
-    
-    def run_job(self, workflow, inputs, dryrun=False):
-        print "Workflow inputs: %s" % ",".join(workflow.get_inputs())
-        os.mkdir(os.path.join(self.workdir, "jobs"))
-        state = WorkflowState(outdir=self.outdir, workdir=self.workdir, inputs=inputs, workflow=workflow)
+
+        jobsdir = os.path.join(self.workdir, "jobs")
+        if not os.path.exists(jobsdir):
+            os.mkdir(jobsdir)
+
+        # state tracks the state of running jobs
+        state = WorkflowState(self.outdir, self.workdir, inputs, workflow)
         
+        # Validate the inputs + workflow:
+        # - check for missing inputs.
+        # - check for tools in toolbox
         for step in workflow.tool_steps():
             i = state.missing_inputs(step) 
             if len(i) > 0:
                 raise Exception("Missing inputs: %s" % (",".join(i)))
+            if step.tool_id not in self.toolbox:
+                raise Exception("Tool %s not found" % (step.tool_id))
         
+        # Start looping over the workflow steps, running steps when they're ready.
+        # Loop until the WorkflowState doesn't have any jobs running.
         while True:
-            ready_found = False
             for step in workflow.tool_steps():
-                if state.step_ready(step) and not state.step_running(step) and not state.step_done(step):
+                # If the step is runnable (ready and not running nor done)
+                if state.step_ready(step) and not state.step_running(step) \
+                   and not state.step_done(step):
+
                     print "step", step.step_id, step.inputs, step.input_connections
-                    if step.tool_id not in self.toolbox:
-                        raise Exception("Tool %s not found" % (step.tool_id))
-                    
                     tool = self.toolbox[step.tool_id]
-                    state.run_job(step, tool, self.manager)
-                    ready_found = True
-            if not ready_found:
-                if state.has_running():
-                    time.sleep(1)
-                else:
-                    break
+
+                    inputs = state.step_inputs(step.step_id)
+                    outputs = state.generate_outputs(step.step_id, tool)
+                    job_dir = state.create_jobdir(step.step_id)
+                    script = tool.render_cmdline(inputs, outputs)
+
+                    print "script (in %s): %s" % (job_dir, script)
+
+                    r = self.new_runner(
+                        tool, step.step_id, job_dir,
+                        script, inputs, outputs
+                    )
+                    r.start()
+                    state.running[step.step_id] = r
+
+            # If there are no jobs running, break, otherwise sleep and repeat.
+            if not state.has_running():
+                break
+            else:
+                time.sleep(1)
         
+        # Check for unexpected things:
+        # - steps that aren't done (they should all be done by now)
         for step in workflow.tool_steps():
             if not state.step_done(step):
                 print "Not done", step, state.missing_inputs(step)
                 #print state.results
                 for name, conn in step.input_connections.items():
-                    if str(conn['id']) not in state.results:
+                    if conn['id'] not in state.results:
                         print "not ready", conn
 
