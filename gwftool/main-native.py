@@ -6,7 +6,6 @@ import yaml
 import logging
 import argparse
 import tempfile
-import gwftool.warpdrive
 import gwftool.tasks
 import gwftool.runner
 import gwftool.workflow_io
