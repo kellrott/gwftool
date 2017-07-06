@@ -7,9 +7,9 @@ import logging
 import argparse
 import tempfile
 
-from gwftool.workflow_io import GalaxyWorkflow
-from gwftool.tool_io import GalaxyTool, ToolBox
-from gwftool.engine import Engine
+import gwftool.workflow_io as workflow_io
+import gwftool.tool_io as tool_io
+import gwftool.engine as engine
 
 
 def main(args=None):
@@ -46,13 +46,20 @@ def main(args=None):
         args.tooldir.append(workflow_dir)
 
     # ToolBox provides access to all the galaxy tools in a the given tool directories.
-    toolbox = ToolBox(args.tooldir)
+    toolbox = tool_io.ToolBox(args.tooldir)
 
     # GalaxyWorkflow represents the workflow definition file
-    workflow = GalaxyWorkflow(ga_file=args.workflow)
+    workflow = workflow_io.GalaxyWorkflow(ga_file=args.workflow)
     
-    engine = Engine(toolbox)
-    engine.run_workflow(workflow, inputs)
+    # Convert the workflow steps into TES task structures
+    tasks = engine.resolve_workflow(toolbox, workdir, workflow, inputs)
+
+    # Write the TES tasks to a series of files.
+    for i, t in enumerate(tasks):
+        path = "task-{}.json".format(i)
+        with open(path, "w") as fh:
+            json.dump(t, fh, indent=4, sort_keys=True)
+
 
 
 if __name__ == "__main__":

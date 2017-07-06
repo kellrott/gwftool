@@ -54,6 +54,7 @@ class ToolOutput(object):
 class CMDFilter(Filter):
     def filter(self, val, **kw):
         if isinstance(val, dict):
+            # TODO this is TES-specific?
             if 'class' in val and val['class'] == 'File':
                 return val['path']
         if isinstance(val, ToolOutput):
@@ -78,7 +79,7 @@ class GalaxyTool(object):
                     self.inputs[name] = param
                 elif s.input_type == "conditional":
                     prefix = s.get("name", "")
-                    for q in s.parse_nested_input_source().parse_input_sources():
+                    for q in s.parse_nested_inputs_source().parse_input_sources():
                         if q.input_type == "param":
                             name, param = self._parse_param(q, prefix)
                             self.inputs[name] = param
@@ -86,9 +87,7 @@ class GalaxyTool(object):
         self.outputs = {}
         outputs, _ = tool.parse_outputs("")
         for name, data in outputs.items():
-            attrs = data.to_dict()
-            from_work_dir = attrs.get('from_work_dir', '')
-            self.outputs[name] = ToolOutput(name=name, from_work_dir=from_work_dir)
+            self.outputs[name] = ToolOutput(name=name, from_work_dir=data.from_work_dir)
 
     def tool_dir(self):
         return os.path.abspath(os.path.dirname(self.config_file))
@@ -131,7 +130,6 @@ class GalaxyTool(object):
         if inter is not None:
             # TODO match what?
             res = re.search(r'^([^\s]+)(\s.*)$', out)
-            print out
             spath = os.path.join(self.tool_dir(), res.group(1))
             if os.path.exists( spath ):
                 out = spath + res.group(2)
