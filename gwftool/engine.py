@@ -1,5 +1,6 @@
 
 import os
+from os.path import abspath
 import time
 import logging
 import shutil
@@ -87,7 +88,6 @@ def to_TES_task(step):
     for k, v in step.outputs.items():
         if isinstance(v, dict) and "class" in v and v["class"] == "File":
             outputs.append({
-                "class": "File",
                 "url": v["url"],
                 "path": v["path"],
             })
@@ -142,6 +142,7 @@ def resolve_workflow(toolbox, workdir, workflow, workflow_inputs):
     data_input = {}
     # Tracks steps by ID, so that their inputs/outputs can be connected.
     steps = {}
+    workdir = abspath(workdir)
 
     # Resolving the steps is done in two passes:
     # 1. create Step objects and generate input/output paths for each.

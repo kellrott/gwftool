@@ -55,7 +55,7 @@ class CMDFilter(Filter):
     def filter(self, val, **kw):
         if isinstance(val, dict):
             # TODO this is TES-specific?
-            if 'class' in val and val['class'] == 'File':
+            if val.get("class") == "File":
                 return val['path']
         if isinstance(val, ToolOutput):
             return val.name

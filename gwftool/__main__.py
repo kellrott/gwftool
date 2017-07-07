@@ -18,7 +18,7 @@ def main(args=None):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-t", "--tooldir", action="append", default=[])
-    parser.add_argument("-w", "--workdir", default="./")
+    parser.add_argument("-w", "--workdir")
     parser.add_argument("-o", "--outdir", default="./")
     parser.add_argument("--no-net", action="store_true", default=False)
     parser.add_argument("workflow")
@@ -35,8 +35,10 @@ def main(args=None):
         if isinstance(i, dict) and i.get('class', None) == 'File':
             i['path'] = os.path.abspath(os.path.join(basedir, i['path']))
 
-    # Get a temporary working directory
-    workdir = os.path.abspath(tempfile.mkdtemp(dir=args.workdir, prefix="gwftool_"))
+    workdir = args.workdir
+    if workdir == "":
+        # Get a temporary working directory
+        workdir = os.path.abspath(tempfile.mkdtemp(dir='.', prefix="gwftool_"))
     os.chmod(workdir, 0o777)
 
     # Automatically include the directory containing the workflow file
